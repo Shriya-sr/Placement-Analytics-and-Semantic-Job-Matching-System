@@ -1,4 +1,5 @@
 .env
 .env.*
 !.env.example
-.pdf
+*.pdf
+placement_analytics_full_backup.sql
