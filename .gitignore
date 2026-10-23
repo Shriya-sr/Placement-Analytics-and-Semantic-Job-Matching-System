@@ -4,3 +4,14 @@
 *.pdf
 placement_analytics_full_backup.sql
 desktop.ini
+
+# Node.js & Next.js
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+
+# Python cache & Chroma storage
+__pycache__/
+*.pyc
+backend/chroma_db/
