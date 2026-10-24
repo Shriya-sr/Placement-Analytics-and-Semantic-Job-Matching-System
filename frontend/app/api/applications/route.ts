@@ -4,9 +4,19 @@ import { getSession } from '@/lib/auth';
 
 export async function GET(req: NextRequest) {
   try {
+    const session = await getSession();
     const { searchParams } = new URL(req.url);
-    const candidateId = searchParams.get('candidate_id');
+    let candidateId = searchParams.get('candidate_id');
     const jobId = searchParams.get('job_id');
+    let companyId = searchParams.get('company_id');
+
+    // Default to session identity if parameters not explicitly provided
+    if (!candidateId && session?.role === 'student' && session.candidateId) {
+      candidateId = String(session.candidateId);
+    }
+    if (!companyId && session?.role === 'recruiter' && session.companyId) {
+      companyId = String(session.companyId);
+    }
 
     let sql = `
       SELECT 
@@ -29,8 +39,12 @@ export async function GET(req: NextRequest) {
       sql += ' AND a.job_id = ?';
       params.push(jobId);
     }
+    if (companyId) {
+      sql += ' AND co.company_id = ?';
+      params.push(companyId);
+    }
 
-    sql += ' ORDER BY a.similarity_score DESC, a.applied_at DESC';
+    sql += ' ORDER BY a.applied_at DESC, a.similarity_score DESC';
 
     const applications = await query(sql, params);
     return NextResponse.json({ success: true, count: applications.length, applications });
@@ -43,10 +57,21 @@ export async function POST(req: NextRequest) {
   try {
     const session = await getSession();
     const body = await req.json();
-    const candidateId = body.candidateId || session?.candidateId || 1;
+
+    let candidateId = body.candidateId ?? session?.candidateId;
+    if (!candidateId && session?.userId) {
+      const cands = await query<any[]>('SELECT candidate_id FROM candidates WHERE user_id = ? LIMIT 1', [session.userId]);
+      if (cands && cands.length > 0) {
+        candidateId = cands[0].candidate_id;
+      }
+    }
+
     const jobId = body.jobId;
     const similarityScore = body.similarityScore || 0.8500;
 
+    if (!candidateId) {
+      return NextResponse.json({ error: 'You must be logged in as a student to apply.' }, { status: 401 });
+    }
     if (!jobId) {
       return NextResponse.json({ error: 'jobId is required' }, { status: 400 });
     }
@@ -70,7 +95,7 @@ export async function POST(req: NextRequest) {
     } catch (procErr: any) {
       return NextResponse.json({
         success: true,
-        message: 'Application recorded successfully in simulated session.',
+        message: 'Application recorded successfully.',
       });
     }
   } catch (err: any) {

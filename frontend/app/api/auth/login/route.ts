@@ -14,37 +14,55 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 1. Query user from MySQL database
+    const cleanEmail = email.trim().toLowerCase();
+
+    // 1. Look up user in database
     const users = await query<any[]>(
-      'SELECT user_id, email, pass_hash, role FROM users WHERE email = ?',
-      [email]
+      'SELECT user_id, email, pass_hash, role FROM users WHERE LOWER(email) = ?',
+      [cleanEmail]
     );
 
-    let user = users && users.length > 0 ? users[0] : null;
+    const user = users && users.length > 0 ? users[0] : null;
 
-    // For evaluation convenience: If user doesn't exist, create or allow demo credentials
     if (!user) {
-      // Demo fallback login for evaluator testing
-      const assignedRole = role || (email.includes('recruiter') ? 'recruiter' : 'student');
-      user = {
-        user_id: assignedRole === 'recruiter' ? 2 : 5,
-        email: email,
-        role: assignedRole,
-      };
-    } else {
-      // If role specified in login toggle doesn't match DB role
-      if (role && user.role !== role && user.role !== 'admin') {
-        return NextResponse.json(
-          { error: `Account exists but role is '${user.role}', not '${role}'` },
-          { status: 403 }
-        );
-      }
+      return NextResponse.json(
+        { error: `No account found with email '${cleanEmail}'. Please register first.` },
+        { status: 401 }
+      );
     }
 
-    // 2. Fetch associated candidate_id or company_id
-    let candidateId = undefined;
-    let companyId = undefined;
-    let fullName = email.split('@')[0];
+    // 2. Verify password (auto-generated ETL accounts have placeholder hashes — allow password123)
+    const isETLAccount = user.pass_hash?.startsWith('$2b$12$auto_hash') ||
+                         user.pass_hash?.startsWith('$2b$12$admin_hash') ||
+                         user.pass_hash?.startsWith('$2b$12$recruiter') ||
+                         user.pass_hash?.startsWith('$2b$12$student_') ||
+                         user.pass_hash?.startsWith('$2b$12$demo');
+    let passwordValid = false;
+    if (isETLAccount && password === 'password123') {
+      passwordValid = true;
+    } else {
+      passwordValid = await bcrypt.compare(password, user.pass_hash || '');
+    }
+
+    if (!passwordValid) {
+      return NextResponse.json(
+        { error: 'Incorrect password. Please verify and try again.' },
+        { status: 401 }
+      );
+    }
+
+    // 3. Role mismatch check
+    if (role && user.role !== role && user.role !== 'admin') {
+      return NextResponse.json(
+        { error: `This account is registered as '${user.role}', not '${role}'. Please use the ${user.role} sign in page.` },
+        { status: 403 }
+      );
+    }
+
+    // 4. Fetch role-specific profile
+    let candidateId: number | undefined;
+    let companyId: number | undefined;
+    let fullName = user.email.split('@')[0];
 
     if (user.role === 'student') {
       const cands = await query<any[]>(
@@ -54,8 +72,6 @@ export async function POST(req: NextRequest) {
       if (cands && cands.length > 0) {
         candidateId = cands[0].candidate_id;
         fullName = cands[0].full_name;
-      } else {
-        candidateId = 1;
       }
     } else if (user.role === 'recruiter') {
       const comps = await query<any[]>(
@@ -65,12 +81,10 @@ export async function POST(req: NextRequest) {
       if (comps && comps.length > 0) {
         companyId = comps[0].company_id;
         fullName = comps[0].company_name;
-      } else {
-        companyId = 1;
       }
     }
 
-    // 3. Generate signed JWT session token
+    // 5. Sign JWT
     const token = await signSessionToken({
       userId: user.user_id,
       email: user.email,
@@ -80,17 +94,9 @@ export async function POST(req: NextRequest) {
       companyId,
     });
 
-    // 4. Set HttpOnly Cookie
     const response = NextResponse.json({
       success: true,
-      user: {
-        userId: user.user_id,
-        email: user.email,
-        role: user.role,
-        name: fullName,
-        candidateId,
-        companyId,
-      },
+      user: { userId: user.user_id, email: user.email, role: user.role, name: fullName, candidateId, companyId },
       redirect: user.role === 'recruiter' ? '/recruiter' : '/student',
     });
 
@@ -101,7 +107,7 @@ export async function POST(req: NextRequest) {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
-      maxAge: 60 * 60 * 24, // 24 hours
+      maxAge: 60 * 60 * 24,
     });
 
     return response;

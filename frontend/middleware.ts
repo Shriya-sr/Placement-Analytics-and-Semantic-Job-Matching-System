@@ -7,7 +7,7 @@
  * Enforces role-specific route protection:
  *  - /student/*   -> accessible ONLY to authenticated 'student' role
  *  - /recruiter/* -> accessible ONLY to authenticated 'recruiter' role
- *  - Public paths -> /, /login, /register, /analytics, /api/auth/*
+ *  - Public paths -> /, /login/*, /register, /analytics, /api/auth/*
  */
 
 import { NextResponse } from 'next/server';
@@ -29,8 +29,8 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/api/auth') ||
     pathname.startsWith('/favicon.ico') ||
     pathname === '/' ||
-    pathname === '/login' ||
-    pathname === '/register' ||
+    pathname.startsWith('/login') ||
+    pathname.startsWith('/register') ||
     pathname === '/analytics'
   ) {
     return NextResponse.next();
@@ -41,9 +41,15 @@ export async function middleware(request: NextRequest) {
     request.headers.get('authorization')?.replace('Bearer ', '');
 
   if (!token) {
-    // If accessing protected student or recruiter routes without token, redirect to login
-    if (pathname.startsWith('/student') || pathname.startsWith('/recruiter')) {
-      const loginUrl = new URL('/login', request.url);
+    // If accessing protected student or recruiter routes without token, redirect to role-specific login
+    if (pathname.startsWith('/student')) {
+      const loginUrl = new URL('/login/student', request.url);
+      loginUrl.searchParams.set('redirect', pathname);
+      loginUrl.searchParams.set('error', 'authentication_required');
+      return NextResponse.redirect(loginUrl);
+    }
+    if (pathname.startsWith('/recruiter')) {
+      const loginUrl = new URL('/login/recruiter', request.url);
       loginUrl.searchParams.set('redirect', pathname);
       loginUrl.searchParams.set('error', 'authentication_required');
       return NextResponse.redirect(loginUrl);
@@ -59,7 +65,7 @@ export async function middleware(request: NextRequest) {
     // 4. Role-Based Access Control Enforcement
     if (pathname.startsWith('/student')) {
       if (userRole !== 'student' && userRole !== 'admin') {
-        const errorUrl = new URL('/login', request.url);
+        const errorUrl = new URL('/login/student', request.url);
         errorUrl.searchParams.set('error', 'unauthorized_student_access');
         return NextResponse.redirect(errorUrl);
       }
@@ -67,7 +73,7 @@ export async function middleware(request: NextRequest) {
 
     if (pathname.startsWith('/recruiter')) {
       if (userRole !== 'recruiter' && userRole !== 'admin') {
-        const errorUrl = new URL('/login', request.url);
+        const errorUrl = new URL('/login/recruiter', request.url);
         errorUrl.searchParams.set('error', 'unauthorized_recruiter_access');
         return NextResponse.redirect(errorUrl);
       }
@@ -86,14 +92,12 @@ export async function middleware(request: NextRequest) {
     });
   } catch (err) {
     // Expired or invalid token
-    if (pathname.startsWith('/student') || pathname.startsWith('/recruiter')) {
-      const loginUrl = new URL('/login', request.url);
-      loginUrl.searchParams.set('error', 'session_expired');
-      const response = NextResponse.redirect(loginUrl);
-      response.cookies.delete(COOKIE_NAME);
-      return response;
-    }
-    return NextResponse.next();
+    const targetLogin = pathname.startsWith('/recruiter') ? '/login/recruiter' : '/login/student';
+    const loginUrl = new URL(targetLogin, request.url);
+    loginUrl.searchParams.set('error', 'session_expired');
+    const response = NextResponse.redirect(loginUrl);
+    response.cookies.delete(COOKIE_NAME);
+    return response;
   }
 }
 
