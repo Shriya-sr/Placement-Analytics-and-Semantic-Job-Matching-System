@@ -203,20 +203,20 @@ BEFORE UPDATE ON candidates
 FOR EACH ROW
 BEGIN
     -- Prevent invalid CGPA values
-    IF NEW.cgpa < 0.00 OR NEW.cgpa > 10.00 THEN
+    IF NEW.cgpa IS NOT NULL AND (NEW.cgpa < 0.00 OR NEW.cgpa > 10.00) THEN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT = 'Integrity Violation: CGPA must be between 0.00 and 10.00';
     END IF;
 
-    -- Audit CGPA update if modified
-    IF OLD.cgpa <> NEW.cgpa THEN
+    -- Audit CGPA update if modified (null-safe)
+    IF NOT (OLD.cgpa <=> NEW.cgpa) THEN
         INSERT INTO audit_logs (table_name, action_type, record_id, changed_by, description, happened_at)
         VALUES (
             'candidates',
             'UPDATE',
             NEW.candidate_id,
             NEW.user_id,
-            CONCAT('Candidate ', NEW.full_name, ' CGPA updated from ', COALESCE(OLD.cgpa, 0), ' to ', NEW.cgpa),
+            CONCAT('Candidate ', NEW.full_name, ' CGPA updated from ', COALESCE(OLD.cgpa, 'NULL'), ' to ', COALESCE(NEW.cgpa, 'NULL')),
             NOW()
         );
     END IF;
