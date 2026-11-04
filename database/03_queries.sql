@@ -1,29 +1,42 @@
--- =============================================================
--- Placement Analytics & Semantic Job Matching System
--- Phase 2: Complex SQL Queries
--- Target File: database/03_queries.sql
--- Covers: Unit 2 - Multi-Table JOINs, Aggregation (GROUP BY/HAVING),
---          Nested Subqueries, Correlated Subqueries, Common Table
---          Expressions (CTEs), Window Functions, Full-Text Search, Set Ops
--- =============================================================
+-- ============================================================================
+-- Placement Analytics and Semantic Job Matching System
+-- ============================================================================
+-- File: database/03_queries.sql
+-- Role: Complex Analytical Queries (Data Query Language - DQL)
+--
+-- Syllabus Coverage (PES University DBMS Level 3 Mini-Project):
+--   • Unit 2: Multi-Table JOINs (Inner, Outer, Multi-Way), Aggregations (GROUP BY,
+--             HAVING), Nested Subqueries, Correlated Subqueries, Common Table
+--             Expressions (CTEs), Window Functions, Full-Text Search, Set Operations.
+--
+-- Team Members:
+--   • Shriya S R (PES1UG24CS449) — Member 1 (Lead: DB Architecture & Transaction Systems)
+--   • Ahana S S  (PES1UG24CS910) — Member 2 (Lead: Analytical Queries & Vector DB Architect)
+-- ============================================================================
 
 USE placement_analytics;
 
--- =============================================================
--- 1. MULTI-TABLE JOINS (Inner, Left, Multi-way)
--- =============================================================
+-- ============================================================================
+-- SECTION 1: MULTI-TABLE RELATIONAL JOINS
+-- ============================================================================
 
--- Q1.1: Comprehensive Placement Report across 4 normalized entities:
--- (candidates -> applications -> jobs -> companies)
+-- ----------------------------------------------------------------------------
+-- Q1.1: Comprehensive Placement Report across 4 Normalized Entities (4-Way INNER JOIN)
+-- ----------------------------------------------------------------------------
+-- DBMS THEORY:
+--   Assembles data distributed across 4 distinct normalized tables:
+--     candidates (c) |><| applications (a) |><| jobs (j) |><| companies (co)
+--   InnoDB optimizer uses indexed foreign key lookups (fk_app_candidate, fk_app_job,
+--   fk_job_company) to compute the join tree in O(N log M) time.
 SELECT
-    c.full_name                         AS candidate_name,
-    c.category                          AS domain,
-    c.cgpa,
+    c.full_name                           AS candidate_name,
+    c.category                            AS candidate_domain,
+    c.cgpa                                AS candidate_cgpa,
     j.job_title,
     co.company_name,
-    co.location                         AS job_location,
-    a.status                            AS application_status,
-    ROUND(a.similarity_score * 100, 2)  AS semantic_match_pct,
+    co.location                           AS job_location,
+    a.status                              AS application_status,
+    ROUND(a.similarity_score * 100, 2)    AS semantic_match_pct,
     DATE_FORMAT(a.applied_at, '%Y-%m-%d') AS applied_date
 FROM applications a
 INNER JOIN candidates c  ON a.candidate_id = c.candidate_id
@@ -31,8 +44,14 @@ INNER JOIN jobs       j  ON a.job_id       = j.job_id
 INNER JOIN companies  co ON j.company_id   = co.company_id
 ORDER BY a.similarity_score DESC;
 
--- Q1.2: Left Outer Join: List all open jobs and the count of applicants,
--- including jobs that have zero applicants yet.
+-- ----------------------------------------------------------------------------
+-- Q1.2: Preserving Zero-Applicant Openings (LEFT OUTER JOIN & Null Handling)
+-- ----------------------------------------------------------------------------
+-- DBMS THEORY:
+--   An INNER JOIN would discard active job openings that currently have ZERO applicants.
+--   A LEFT OUTER JOIN preserves all rows from the left relation (jobs), producing
+--   NULL for unmatched application rows. Using COUNT(a.application_id) correctly
+--   evaluates NULLs to 0, unlike COUNT(*) which would erroneously count 1 for NULL rows.
 SELECT
     j.job_id,
     j.job_title,
@@ -48,17 +67,26 @@ GROUP BY j.job_id, j.job_title, co.company_name, j.location, j.num_positions
 ORDER BY total_applicants DESC;
 
 
--- =============================================================
--- 2. AGGREGATE FUNCTIONS WITH GROUP BY AND HAVING
--- =============================================================
+-- ============================================================================
+-- SECTION 2: AGGREGATE FUNCTIONS WITH GROUP BY AND HAVING
+-- ============================================================================
 
--- Q2.1: Industry-wise Job & Vacancy Analysis with threshold filtering:
--- Only show industries offering more than 1 open position with competitive stats
+-- ----------------------------------------------------------------------------
+-- Q2.1: Industry-Wise Vacancy & Experience Analysis with Group Threshold Filtering
+-- ----------------------------------------------------------------------------
+-- CORE VIVA CONCEPT (Execution Order of SQL Clauses):
+--   1. FROM & JOIN: Forms Cartesian product of jobs and companies.
+--   2. WHERE: Evaluates row-level predicates BEFORE grouping (only open jobs).
+--   3. GROUP BY: Partitions surviving rows by co.industry.
+--   4. AGGREGATES: Computes COUNT(), SUM(), and AVG() per industry partition.
+--   5. HAVING: Filters aggregated groups AFTER calculation (only industries with 2+ vacancies).
+--   6. SELECT: Formats the output column projection.
+--   7. ORDER BY: Sorts the final result set descending by total vacancies.
 SELECT
     co.industry,
-    COUNT(DISTINCT co.company_id) AS active_companies,
-    COUNT(j.job_id)               AS total_job_openings,
-    SUM(j.num_positions)          AS total_vacancies,
+    COUNT(DISTINCT co.company_id)   AS active_companies,
+    COUNT(j.job_id)                 AS total_job_openings,
+    SUM(j.num_positions)            AS total_vacancies,
     ROUND(AVG(j.experience_min), 1) AS avg_min_experience_years
 FROM jobs j
 INNER JOIN companies co ON j.company_id = co.company_id
@@ -67,12 +95,15 @@ GROUP BY co.industry
 HAVING SUM(j.num_positions) >= 2
 ORDER BY total_vacancies DESC;
 
--- Q2.2: Skill demand density:
--- Count jobs requiring each skill, categorized by mandatory vs optional
+-- ----------------------------------------------------------------------------
+-- Q2.2: Skill Market Demand Density (Conditional Aggregation with CASE WHEN)
+-- ----------------------------------------------------------------------------
+-- Combines SUM(CASE WHEN ...) inside GROUP BY to count mandatory prerequisites
+-- vs. preferred secondary skills per master skill entity.
 SELECT
     s.skill_name,
     s.category,
-    COUNT(js.job_id)                 AS total_job_mentions,
+    COUNT(js.job_id) AS total_job_mentions,
     SUM(CASE WHEN js.is_mandatory = 1 THEN 1 ELSE 0 END) AS mandatory_requirement_count,
     SUM(CASE WHEN js.is_mandatory = 0 THEN 1 ELSE 0 END) AS preferred_requirement_count
 FROM skills s
@@ -82,11 +113,17 @@ HAVING COUNT(js.job_id) >= 1
 ORDER BY total_job_mentions DESC, mandatory_requirement_count DESC;
 
 
--- =============================================================
--- 3. NESTED SUBQUERIES (Non-Correlated)
--- =============================================================
+-- ============================================================================
+-- SECTION 3: NESTED SUBQUERIES (Non-Correlated / Independent Evaluation)
+-- ============================================================================
 
--- Q3.1: Candidates whose CGPA is higher than the overall average CGPA
+-- ----------------------------------------------------------------------------
+-- Q3.1: Candidates Exceeding Overall Academic Benchmark (Scalar Subquery)
+-- ----------------------------------------------------------------------------
+-- DBMS THEORY:
+--   The inner subquery (SELECT AVG(cgpa) FROM candidates) is completely independent
+--   of the outer query. The query optimizer evaluates it EXACTLY ONCE to produce a scalar
+--   constant, which is then used as a filter threshold for the outer candidate scan.
 SELECT
     full_name,
     category,
@@ -100,7 +137,11 @@ WHERE cgpa > (
 )
 ORDER BY cgpa DESC;
 
--- Q3.2: Jobs that require top-tier skills (e.g., Deep Learning or NLP)
+-- ----------------------------------------------------------------------------
+-- Q3.2: Jobs Requiring Specialized Advanced Skills (IN Predicate Subquery)
+-- ----------------------------------------------------------------------------
+-- Evaluates membership using 'IN (subquery)', identifying jobs demanding
+-- deep tech capabilities (Deep Learning, NLP, or TensorFlow).
 SELECT
     j.job_id,
     j.job_title,
@@ -116,12 +157,17 @@ WHERE j.job_id IN (
 );
 
 
--- =============================================================
--- 4. CORRELATED SUBQUERIES
--- =============================================================
+-- ============================================================================
+-- SECTION 4: CORRELATED SUBQUERIES & EXISTS PREDICATE
+-- ============================================================================
 
--- Q4.1: Candidates who have achieved above the average similarity score
--- for the specific jobs they applied to (Correlated on job_id)
+-- ----------------------------------------------------------------------------
+-- Q4.1: Candidates Scoring Above Their Specific Job's Dynamic Average
+-- ----------------------------------------------------------------------------
+-- DBMS THEORY:
+--   In a correlated subquery, the inner query references attributes from the outer query
+--   (sub.job_id = a.job_id). It computes the average match score dynamically FOR THAT
+--   SPECIFIC JOB opening and verifies if the candidate scored above peer applicants.
 SELECT
     c.full_name,
     j.job_title,
@@ -138,7 +184,13 @@ JOIN (
 ) sub ON a.job_id = sub.job_id
 WHERE a.similarity_score >= sub.avg_job_similarity;
 
--- Q4.2: Companies that have at least one candidate shortlisted or hired (EXISTS)
+-- ----------------------------------------------------------------------------
+-- Q4.2: Companies with Successfully Placed Candidates (EXISTS Semi-Join)
+-- ----------------------------------------------------------------------------
+-- DBMS THEORY:
+--   The 'EXISTS' operator tests for the presence of rows returned by the subquery.
+--   Unlike IN or COUNT(), EXISTS short-circuits to TRUE as soon as the first matching
+--   record is encountered, preventing unnecessary full table scanning.
 SELECT
     co.company_id,
     co.company_name,
@@ -153,12 +205,19 @@ WHERE EXISTS (
 );
 
 
--- =============================================================
--- 5. COMMON TABLE EXPRESSIONS (CTEs)
--- =============================================================
+-- ============================================================================
+-- SECTION 5: COMMON TABLE EXPRESSIONS (CTEs)
+-- ============================================================================
 
--- Q5.1: Multi-stage Hiring Funnel CTE:
--- Calculate application conversion rate from applied -> shortlisted -> hired per company
+-- ----------------------------------------------------------------------------
+-- Q5.1: Multi-Stage Corporate Recruitment Conversion Funnel (Chained CTEs)
+-- ----------------------------------------------------------------------------
+-- DBMS THEORY:
+--   CTEs (WITH ... AS) create modular, named temporary result sets within execution scope.
+--   Stage 1 (stage_counts): Computes applicant volume grouped by company and stage.
+--   Stage 2 (company_totals): Computes total overall applicant volume per company.
+--   Final Query: Joins both temporary tables to calculate exact conversion percentages
+--   (e.g., % of total applicants who were successfully shortlisted or hired).
 WITH stage_counts AS (
     SELECT
         co.company_name,
@@ -178,7 +237,7 @@ company_totals AS (
 )
 SELECT
     sc.company_name,
-    sc.status                                          AS recruitment_stage,
+    sc.status                                                      AS recruitment_stage,
     sc.candidate_count,
     ct.total_applications,
     ROUND((sc.candidate_count * 100.0 / ct.total_applications), 2) AS conversion_percentage
@@ -186,8 +245,10 @@ FROM stage_counts sc
 JOIN company_totals ct ON sc.company_name = ct.company_name
 ORDER BY sc.company_name, sc.status;
 
--- Q5.2: Skill Match Count CTE:
--- Quantify candidate skill overlap with job mandatory requirements
+-- ----------------------------------------------------------------------------
+-- Q5.2: Verified Skill Overlap CTE (Comparing Candidate Skills vs. Mandatory Job Prereqs)
+-- ----------------------------------------------------------------------------
+-- Computes the exact count of verified mandatory skills matched per applicant.
 WITH candidate_job_skill_overlap AS (
     SELECT
         a.candidate_id,
@@ -213,11 +274,20 @@ LEFT JOIN candidate_job_skill_overlap cjs
 ORDER BY verified_mandatory_skills_matched DESC, a.similarity_score DESC;
 
 
--- =============================================================
--- 6. WINDOW FUNCTIONS (Ranking, Partitioning, Cumulative)
--- =============================================================
+-- ============================================================================
+-- SECTION 6: WINDOW FUNCTIONS (Ranking, Partitioning & Cumulative Analytics)
+-- ============================================================================
 
--- Q6.1: RANK(), DENSE_RANK(), and ROW_NUMBER() over applicant scores per job
+-- ----------------------------------------------------------------------------
+-- Q6.1: Candidate Match Leaderboard per Job Opening (Window Partitioning)
+-- ----------------------------------------------------------------------------
+-- MATHEMATICAL DISTINCTION BETWEEN WINDOW RANKING FUNCTIONS:
+--   • ROW_NUMBER(): Assigns strict sequential integers (1, 2, 3...) regardless of ties.
+--   • RANK(): Identical values receive identical ranks, leaving a gap for subsequent rows
+--             (e.g., scores 0.95, 0.95, 0.80 -> ranks 1, 1, 3).
+--   • DENSE_RANK(): Identical values receive identical ranks without gaps
+--                   (e.g., scores 0.95, 0.95, 0.80 -> ranks 1, 1, 2).
+--   Unlike GROUP BY, window functions do not collapse rows; each student tuple is preserved.
 SELECT
     j.job_title,
     c.full_name                         AS candidate_name,
@@ -231,7 +301,11 @@ JOIN jobs       j ON a.job_id       = j.job_id
 WHERE a.similarity_score IS NOT NULL
 ORDER BY a.job_id, score_rank;
 
--- Q6.2: Running Total & Cumulative Application Tracking by Date
+-- ----------------------------------------------------------------------------
+-- Q6.2: Platform Cumulative Application Growth & 3-Day Rolling Moving Average
+-- ----------------------------------------------------------------------------
+-- Uses 'SUM() OVER (ORDER BY date)' to compute cumulative running totals over time,
+-- and 'ROWS BETWEEN 2 PRECEDING AND CURRENT ROW' for moving averages.
 SELECT
     DATE(applied_at)                                      AS application_date,
     COUNT(*)                                              AS daily_applications,
@@ -244,11 +318,18 @@ FROM applications
 GROUP BY DATE(applied_at), similarity_score;
 
 
--- =============================================================
--- 7. FULL-TEXT SEARCH
--- =============================================================
+-- ============================================================================
+-- SECTION 7: FULL-TEXT SEARCH (Inverted Index Querying)
+-- ============================================================================
 
--- Q7.1: Semantic and keyword matching on Job Description and Title
+-- ----------------------------------------------------------------------------
+-- Q7.1: Natural Language Relevance Scoring on Job Postings
+-- ----------------------------------------------------------------------------
+-- DBMS THEORY:
+--   Queries the inverted FULLTEXT index created in schema.sql.
+--   'MATCH ... AGAINST (... IN NATURAL LANGUAGE MODE)' evaluates token relevance
+--   using term-frequency / inverse-document-frequency (TF-IDF), returning floating
+--   point relevance scores in milliseconds without slow full-table scans.
 SELECT
     j.job_id,
     j.job_title,
@@ -263,11 +344,15 @@ WHERE MATCH(j.job_title, j.job_description)
 ORDER BY relevance_score DESC;
 
 
--- =============================================================
--- 8. SET OPERATIONS (UNION & UNION ALL)
--- =============================================================
+-- ============================================================================
+-- SECTION 8: SET OPERATIONS (UNION & UNION ALL)
+-- ============================================================================
 
--- Q8.1: Geographic footprint across all companies and job listings
+-- ----------------------------------------------------------------------------
+-- Q8.1: Geographic Footprint Union across Companies & Job Locations
+-- ----------------------------------------------------------------------------
+-- 'UNION' automatically deduplicates identical city names across tables.
+-- (UNION ALL would retain duplicates if frequency counting was desired).
 SELECT location AS city, 'Job Posting City' AS source_type FROM jobs WHERE location IS NOT NULL
 UNION
 SELECT location AS city, 'Company HQ'       AS source_type FROM companies WHERE location IS NOT NULL

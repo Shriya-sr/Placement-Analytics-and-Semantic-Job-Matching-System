@@ -1,20 +1,41 @@
--- =============================================================
--- Placement Analytics & Semantic Job Matching System
--- Phase 3: Advanced SQL Concepts (Stored Procedures, Transactions, Triggers, Views)
--- Target File: database/04_advanced.sql
--- Covers: Unit 2 & Unit 3 - Stored Procedures with ACID Transactions,
---          Audit Log Triggers, Materialized/Standard SQL Views,
---          Referential & Business Rule Integrity
--- =============================================================
+-- ============================================================================
+-- Placement Analytics and Semantic Job Matching System
+-- ============================================================================
+-- File: database/04_advanced.sql
+-- Role: Advanced Database Concepts (Views, Triggers, Stored Procedures, ACID Transactions)
+--
+-- Syllabus Coverage (PES University DBMS Level 3 Mini-Project):
+--   • Section 7 of Rubric (Advanced Database Features - Minimum 4 required):
+--       1. Relational Views (Data Virtualization & Abstraction)
+--       2. Automated Database Triggers (Audit Trails & Domain Integrity)
+--       3. Stored Procedures (Encapsulated Business Workflows)
+--       4. ACID Transactions (START TRANSACTION, COMMIT, ROLLBACK, Exception Handlers)
+--       5. Concurrency Control (Race-condition prevention in vacancy management)
+--
+-- Team Members:
+--   • Shriya S R (PES1UG24CS449) — Member 1 (Lead: DB Architecture & Transaction Systems)
+--   • Ahana S S  (PES1UG24CS910) — Member 2 (Lead: Analytical Queries & Vector DB Architect)
+-- ============================================================================
 
 USE placement_analytics;
 
--- =============================================================
--- SECTION 1: VIEWS (Placement Analytics & Reporting)
--- =============================================================
+-- ============================================================================
+-- SECTION 1: RELATIONAL VIEWS (Virtual Tables for Abstraction & Reporting)
+-- ============================================================================
+-- DBMS THEORY:
+--   A View is a stored query specification that presents a virtual table dynamically.
+--   Benefits in this Architecture:
+--     1. Security & Abstraction: The Next.js frontend interacts with clean view projections
+--        without exposing underlying sensitive table schemas or raw user credential columns.
+--     2. Performance: Pre-compiles complex multi-table joins and aggregation trees.
+--     3. Consistency: Guarantees unified calculation logic across student, recruiter,
+--        and placement office analytics dashboards.
 
--- View 1: Active Job Market Summary
--- Displays active job postings joined with company profile and applicant count
+-- ----------------------------------------------------------------------------
+-- View 1: vw_active_jobs (Powers the Student Job Board Interface)
+-- ----------------------------------------------------------------------------
+-- Joins open jobs with company details, computing real-time applicant volume
+-- and average semantic similarity match percentage.
 CREATE OR REPLACE VIEW vw_active_jobs AS
 SELECT
     j.job_id,
@@ -28,7 +49,7 @@ SELECT
     j.payrate,
     j.num_positions,
     j.posted_at,
-    COUNT(a.application_id) AS total_applicants,
+    COUNT(a.application_id)                 AS total_applicants,
     ROUND(AVG(a.similarity_score) * 100, 1) AS avg_applicant_match_pct
 FROM jobs j
 JOIN companies co ON j.company_id = co.company_id
@@ -38,7 +59,12 @@ GROUP BY j.job_id, j.job_title, co.company_id, co.company_name, co.industry,
          j.location, j.experience_min, j.experience_max, j.payrate,
          j.num_positions, j.posted_at;
 
--- View 2: Candidate Performance & Placement Summary (Student Portal View)
+-- ----------------------------------------------------------------------------
+-- View 2: vw_candidate_summary (Powers the Student Personal Dashboard)
+-- ----------------------------------------------------------------------------
+-- Consolidates each candidate's application pipeline status into a single row:
+-- total submitted, reviewed, shortlisted, hired, and rejected counts,
+-- along with their highest achieved semantic match percentage.
 CREATE OR REPLACE VIEW vw_candidate_summary AS
 SELECT
     c.candidate_id,
@@ -57,7 +83,11 @@ FROM candidates c
 LEFT JOIN applications a ON c.candidate_id = a.candidate_id
 GROUP BY c.candidate_id, c.user_id, c.full_name, c.category, c.education_level, c.cgpa;
 
--- View 3: Company Recruitment KPIs & Conversion Funnel
+-- ----------------------------------------------------------------------------
+-- View 3: vw_company_analytics (Powers Recruiter KPIs & Conversion Funnel)
+-- ----------------------------------------------------------------------------
+-- Computes recruitment pipeline metrics per enterprise: total postings, open vs closed
+-- positions, total candidates received, and hiring conversion rate (Hired / Total * 100).
 CREATE OR REPLACE VIEW vw_company_analytics AS
 SELECT
     co.company_id,
@@ -81,7 +111,11 @@ LEFT JOIN jobs j ON co.company_id = j.company_id
 LEFT JOIN applications a ON j.job_id = a.job_id
 GROUP BY co.company_id, co.company_name, co.industry;
 
--- View 4: Skill Market Demand Breakdown
+-- ----------------------------------------------------------------------------
+-- View 4: vw_skill_demand (Curriculum & Skill Gap Analysis)
+-- ----------------------------------------------------------------------------
+-- Cross-aggregates industry demand from job_skills against student talent supply
+-- from candidate_skills, splitting demand into mandatory prerequisites vs preferred.
 CREATE OR REPLACE VIEW vw_skill_demand AS
 SELECT
     s.skill_id,
@@ -96,7 +130,11 @@ LEFT JOIN job_skills js ON s.skill_id = js.skill_id
 LEFT JOIN candidate_skills cs ON s.skill_id = cs.skill_id
 GROUP BY s.skill_id, s.skill_name, s.category;
 
--- View 5: Human-Readable System Audit History
+-- ----------------------------------------------------------------------------
+-- View 5: vw_audit_history (Human-Readable Security & Compliance Trail)
+-- ----------------------------------------------------------------------------
+-- Formats raw trigger-populated audit entries joined with user accounts
+-- to display the exact identity (email, role) responsible for database mutations.
 CREATE OR REPLACE VIEW vw_audit_history AS
 SELECT
     al.log_id,
@@ -113,9 +151,17 @@ LEFT JOIN users u ON al.changed_by = u.user_id
 ORDER BY al.happened_at DESC;
 
 
--- =============================================================
--- SECTION 2: TRIGGERS (Automated Audit Trails & Integrity Checks)
--- =============================================================
+-- ============================================================================
+-- SECTION 2: AUTOMATED TRIGGERS (Auditing & Domain Integrity)
+-- ============================================================================
+-- DBMS THEORY:
+--   Triggers are event-driven procedural routines executed automatically by MySQL
+--   when specific DML events (INSERT, UPDATE, DELETE) occur on a table.
+--   Key Distinctions:
+--     • BEFORE Triggers: Fire BEFORE changes are committed. Used for data validation,
+--       sanitization, or aborting transactions using SIGNAL SQLSTATE '45000'.
+--     • AFTER Triggers: Fire AFTER changes succeed. Used for change data capture (CDC),
+--       audit logging, and synchronizing secondary audit tables.
 
 DROP TRIGGER IF EXISTS trg_after_application_insert;
 DROP TRIGGER IF EXISTS trg_after_application_update;
@@ -125,7 +171,10 @@ DROP TRIGGER IF EXISTS trg_before_candidate_update;
 
 DELIMITER $$
 
--- Trigger 1: Log every new job application into audit_logs
+-- ----------------------------------------------------------------------------
+-- Trigger 1: trg_after_application_insert (Application Submission Audit)
+-- ----------------------------------------------------------------------------
+-- Automatically writes an immutable audit record whenever a candidate applies.
 CREATE TRIGGER trg_after_application_insert
 AFTER INSERT ON applications
 FOR EACH ROW
@@ -143,7 +192,10 @@ BEGIN
     );
 END$$
 
--- Trigger 2: Log state transitions of applications (e.g., applied -> shortlisted -> hired)
+-- ----------------------------------------------------------------------------
+-- Trigger 2: trg_after_application_update (Recruitment Stage Transition Audit)
+-- ----------------------------------------------------------------------------
+-- Detects workflow state transitions (e.g., applied -> shortlisted -> hired).
 CREATE TRIGGER trg_after_application_update
 AFTER UPDATE ON applications
 FOR EACH ROW
@@ -163,7 +215,10 @@ BEGIN
     END IF;
 END$$
 
--- Trigger 3: Log application deletion / withdrawal
+-- ----------------------------------------------------------------------------
+-- Trigger 3: trg_after_application_delete (Application Withdrawal Audit)
+-- ----------------------------------------------------------------------------
+-- Captures candidate application withdrawal or record pruning.
 CREATE TRIGGER trg_after_application_delete
 AFTER DELETE ON applications
 FOR EACH ROW
@@ -179,7 +234,10 @@ BEGIN
     );
 END$$
 
--- Trigger 4: Log Job Status Changes (e.g. open -> closed)
+-- ----------------------------------------------------------------------------
+-- Trigger 4: trg_after_job_status_change (Job Opening / Closing Event Audit)
+-- ----------------------------------------------------------------------------
+-- Logs changes between 'open' and 'closed' statuses for regulatory transparency.
 CREATE TRIGGER trg_after_job_status_change
 AFTER UPDATE ON jobs
 FOR EACH ROW
@@ -197,18 +255,28 @@ BEGIN
     END IF;
 END$$
 
--- Trigger 5: Candidate profile integrity check & audit logging
+-- ----------------------------------------------------------------------------
+-- Trigger 5: trg_before_candidate_update (Domain Integrity Guard & Null-Safe Audit)
+-- ----------------------------------------------------------------------------
+-- CORE VIVA CONCEPTS:
+--   1. BEFORE UPDATE Validation: Intercepts the row before modification is committed.
+--      If NEW.cgpa is outside [0.00, 10.00], it executes 'SIGNAL SQLSTATE 45000',
+--      raising an unhandled user exception that aborts the DML statement.
+--   2. Null-Safe Equality Operator (<=>):
+--      Standard '<>' yields NULL if either operand is NULL, failing to detect when
+--      a previously unassigned CGPA (NULL) is updated to a numeric value.
+--      The spaceship operator '<=>' guarantees true/false evaluation across NULLs.
 CREATE TRIGGER trg_before_candidate_update
 BEFORE UPDATE ON candidates
 FOR EACH ROW
 BEGIN
-    -- Prevent invalid CGPA values
+    -- Domain Validation: Abort invalid CGPA
     IF NEW.cgpa IS NOT NULL AND (NEW.cgpa < 0.00 OR NEW.cgpa > 10.00) THEN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT = 'Integrity Violation: CGPA must be between 0.00 and 10.00';
     END IF;
 
-    -- Audit CGPA update if modified (null-safe)
+    -- Null-Safe Audit Comparison: Detects grade changes from/to NULL
     IF NOT (OLD.cgpa <=> NEW.cgpa) THEN
         INSERT INTO audit_logs (table_name, action_type, record_id, changed_by, description, happened_at)
         VALUES (
@@ -226,9 +294,19 @@ DELIMITER ;
 
 
 -- =============================================================
--- SECTION 3: STORED PROCEDURES WITH TRANSACTION MANAGEMENT
--- Demonstrates START TRANSACTION, COMMIT, ROLLBACK, and Exception Handlers
+-- SECTION 3: STORED PROCEDURES WITH ATOMIC ACID TRANSACTIONS
 -- =============================================================
+-- DBMS THEORY:
+--   ACID Properties Enforced:
+--     • Atomicity: All operations in the procedure succeed, or all are rolled back.
+--     • Consistency: Preserves all CHECK, FOREIGN KEY, and UNIQUE constraints.
+--     • Isolation: Read Committed / Repeatable Read prevents dirty reads.
+--     • Durability: Once committed, updates persist permanently on disk.
+--
+-- Exception Handling Architecture:
+--   'DECLARE EXIT HANDLER FOR SQLEXCEPTION': If ANY constraint violation or SQL
+--   error occurs at any step, the handler executes ROLLBACK immediately and
+--   returns an error status code to the calling application.
 
 DROP PROCEDURE IF EXISTS sp_apply_job;
 DROP PROCEDURE IF EXISTS sp_hire_candidate;
@@ -236,15 +314,14 @@ DROP PROCEDURE IF EXISTS sp_post_job_with_audit;
 
 DELIMITER $$
 
--- =============================================================
--- Procedure 1: sp_apply_job
--- Transactional procedure for student application:
--- 1. Validates candidate existence
--- 2. Validates job existence and active 'open' status
--- 3. Checks for duplicate application
--- 4. Inserts into applications table
--- 5. Logs audit event atomically
--- =============================================================
+-- ----------------------------------------------------------------------------
+-- Procedure 1: sp_apply_job (Atomic Candidate Job Application)
+-- ----------------------------------------------------------------------------
+-- Workflow:
+--   1. Validates candidate existence.
+--   2. Validates job existence and active 'open' status.
+--   3. Checks for duplicate applications.
+--   4. Atomically inserts application and commits transaction.
 CREATE PROCEDURE sp_apply_job(
     IN  p_candidate_id     INT,
     IN  p_job_id           INT,
@@ -257,7 +334,7 @@ proc_label: BEGIN
     DECLARE v_cand_exists  INT DEFAULT 0;
     DECLARE v_app_exists   INT DEFAULT 0;
 
-    -- Error handler: if any SQL exception occurs, rollback changes
+    -- Error handler: If any SQL exception occurs, rollback and exit
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         ROLLBACK;
@@ -265,7 +342,7 @@ proc_label: BEGIN
         SET p_status_message = 'Transaction Failed: SQLEXCEPTION encountered during job application. Rolled back.';
     END;
 
-    -- Validation 1: Candidate exists
+    -- Validation 1: Candidate existence check
     SELECT COUNT(*) INTO v_cand_exists FROM candidates WHERE candidate_id = p_candidate_id;
     IF v_cand_exists = 0 THEN
         SET p_status_code = 1;
@@ -273,7 +350,7 @@ proc_label: BEGIN
         LEAVE proc_label;
     END IF;
 
-    -- Validation 2: Job exists and is open
+    -- Validation 2: Job existence & active status check
     SELECT status INTO v_job_status FROM jobs WHERE job_id = p_job_id;
     IF v_job_status IS NULL THEN
         SET p_status_code = 1;
@@ -309,14 +386,18 @@ proc_label: BEGIN
 END proc_label$$
 
 
--- =============================================================
--- Procedure 2: sp_hire_candidate
--- Transactional procedure for recruiter hiring action:
--- 1. Updates application status to 'hired'
--- 2. Decrements available positions (num_positions) on the job
--- 3. If num_positions reaches 0, automatically changes job status to 'closed'
--- 4. Ensures all modifications happen atomically or are rolled back
--- =============================================================
+-- ----------------------------------------------------------------------------
+-- Procedure 2: sp_hire_candidate (Atomic Multi-Entity Hiring Workflow)
+-- ----------------------------------------------------------------------------
+-- CRITICAL CONCURRENCY PROBLEM SOLVED:
+--   When hiring a candidate, multiple operations MUST happen synchronously:
+--     Step 1: Mark applicant status as 'hired'.
+--     Step 2: Decrement open vacancies (num_positions = GREATEST(0, num_positions - 1)).
+--     Step 3: If num_positions reaches 0, automatically transition jobs.status to 'closed'.
+--     Step 4: Record hiring decision in audit_logs.
+--   If a crash occurs after Step 1, the system would be in an inconsistent state
+--   (candidate hired but vacancy not decremented). START TRANSACTION and COMMIT
+--   guarantee that either ALL steps succeed or NONE take effect.
 CREATE PROCEDURE sp_hire_candidate(
     IN  p_job_id         INT,
     IN  p_candidate_id   INT,
@@ -359,7 +440,7 @@ hire_label: BEGIN
     SET status = 'hired'
     WHERE job_id = p_job_id AND candidate_id = p_candidate_id;
 
-    -- Step 2: Decrement available vacancies
+    -- Step 2: Decrement available vacancies safely
     UPDATE jobs
     SET num_positions = GREATEST(0, num_positions - 1)
     WHERE job_id = p_job_id;
@@ -369,7 +450,7 @@ hire_label: BEGIN
     FROM jobs
     WHERE job_id = p_job_id;
 
-    -- Step 4: If no more vacancies remain, close the job
+    -- Step 4: If no more vacancies remain, close the job opening
     IF v_remaining_positions <= 0 THEN
         UPDATE jobs
         SET status = 'closed'
@@ -395,11 +476,10 @@ hire_label: BEGIN
 END hire_label$$
 
 
--- =============================================================
--- Procedure 3: sp_post_job_with_audit
--- Transactional procedure for recruiters to publish a job posting
--- and initialize its requirements and audit trail atomically.
--- =============================================================
+-- ----------------------------------------------------------------------------
+-- Procedure 3: sp_post_job_with_audit (Atomic Job Creation & Compliance Logging)
+-- ----------------------------------------------------------------------------
+-- Atomically publishes a new job posting and records its creation in audit_logs.
 CREATE PROCEDURE sp_post_job_with_audit(
     IN  p_company_id    INT,
     IN  p_job_title     VARCHAR(255),
@@ -444,9 +524,9 @@ END$$
 DELIMITER ;
 
 
--- =============================================================
+-- ============================================================================
 -- SECTION 4: DEMONSTRATION & VERIFICATION OF ADVANCED FEATURES
--- =============================================================
+-- ============================================================================
 
 -- 4.1 Test sp_apply_job execution
 CALL sp_apply_job(2, 4, 0.8250, @out_code, @out_msg);
@@ -456,10 +536,10 @@ SELECT @out_code AS result_code, @out_msg AS result_message;
 CALL sp_hire_candidate(1, 1, 1, @hire_code, @hire_msg);
 SELECT @hire_code AS hire_code, @hire_msg AS hire_message;
 
--- 4.3 Inspect Triggers output in Audit Log
+-- 4.3 Inspect Triggers output in Audit Log View
 SELECT * FROM vw_audit_history LIMIT 10;
 
--- 4.4 Inspect Views
+-- 4.4 Inspect Analytical Views
 SELECT * FROM vw_active_jobs;
 SELECT * FROM vw_candidate_summary;
 SELECT * FROM vw_company_analytics;
