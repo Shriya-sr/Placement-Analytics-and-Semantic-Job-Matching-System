@@ -17,6 +17,7 @@
 --   • Ahana S S  (PES1UG24CS910) — Member 2 (Lead: Analytical Queries & Vector DB Architect)
 -- ============================================================================
 
+-- Select the schema that owns the views, triggers, procedures, and demo data.
 USE placement_analytics;
 
 -- ============================================================================
@@ -163,6 +164,7 @@ ORDER BY al.happened_at DESC;
 --     • AFTER Triggers: Fire AFTER changes succeed. Used for change data capture (CDC),
 --       audit logging, and synchronizing secondary audit tables.
 
+-- Remove old definitions first so this script can recreate the current trigger versions.
 DROP TRIGGER IF EXISTS trg_after_application_insert;
 DROP TRIGGER IF EXISTS trg_after_application_update;
 DROP TRIGGER IF EXISTS trg_after_application_delete;
@@ -179,6 +181,7 @@ CREATE TRIGGER trg_after_application_insert
 AFTER INSERT ON applications
 FOR EACH ROW
 BEGIN
+    -- Write one audit row using NEW values from the application just inserted.
     INSERT INTO audit_logs (table_name, action_type, record_id, changed_by, description, happened_at)
     VALUES (
         'applications',
@@ -200,7 +203,9 @@ CREATE TRIGGER trg_after_application_update
 AFTER UPDATE ON applications
 FOR EACH ROW
 BEGIN
+    -- Only log an update when the application's workflow status actually changed.
     IF OLD.status <> NEW.status THEN
+        -- Record both the previous and new status for this application.
         INSERT INTO audit_logs (table_name, action_type, record_id, changed_by, description, happened_at)
         VALUES (
             'applications',
@@ -223,6 +228,7 @@ CREATE TRIGGER trg_after_application_delete
 AFTER DELETE ON applications
 FOR EACH ROW
 BEGIN
+    -- Preserve identifying details from OLD because the application row is being removed.
     INSERT INTO audit_logs (table_name, action_type, record_id, changed_by, description, happened_at)
     VALUES (
         'applications',
@@ -242,7 +248,9 @@ CREATE TRIGGER trg_after_job_status_change
 AFTER UPDATE ON jobs
 FOR EACH ROW
 BEGIN
+    -- Ignore updates to other job fields; audit only open/closed transitions.
     IF OLD.status <> NEW.status THEN
+        -- Record the job whose status changed and the old/new states.
         INSERT INTO audit_logs (table_name, action_type, record_id, changed_by, description, happened_at)
         VALUES (
             'jobs',
@@ -308,6 +316,7 @@ DELIMITER ;
 --   error occurs at any step, the handler executes ROLLBACK immediately and
 --   returns an error status code to the calling application.
 
+-- Remove existing procedure definitions so the following CREATE statements install the latest versions.
 DROP PROCEDURE IF EXISTS sp_apply_job;
 DROP PROCEDURE IF EXISTS sp_hire_candidate;
 DROP PROCEDURE IF EXISTS sp_post_job_with_audit;
@@ -342,7 +351,7 @@ proc_label: BEGIN
         SET p_status_message = 'Transaction Failed: SQLEXCEPTION encountered during job application. Rolled back.';
     END;
 
-    -- Validation 1: Candidate existence check
+    -- Validation 1: Count matching candidate rows; zero means the supplied ID is invalid.
     SELECT COUNT(*) INTO v_cand_exists FROM candidates WHERE candidate_id = p_candidate_id;
     IF v_cand_exists = 0 THEN
         SET p_status_code = 1;
@@ -350,7 +359,7 @@ proc_label: BEGIN
         LEAVE proc_label;
     END IF;
 
-    -- Validation 2: Job existence & active status check
+    -- Validation 2: Read the job state; NULL means missing, and non-open means closed.
     SELECT status INTO v_job_status FROM jobs WHERE job_id = p_job_id;
     IF v_job_status IS NULL THEN
         SET p_status_code = 1;
@@ -362,7 +371,7 @@ proc_label: BEGIN
         LEAVE proc_label;
     END IF;
 
-    -- Validation 3: Duplicate application check
+    -- Validation 3: Count this candidate/job pair to reject repeat applications.
     SELECT COUNT(*) INTO v_app_exists 
     FROM applications 
     WHERE candidate_id = p_candidate_id AND job_id = p_job_id;
@@ -373,14 +382,17 @@ proc_label: BEGIN
         LEAVE proc_label;
     END IF;
 
-    -- Begin Transaction
+    -- Begin the write transaction after the read-only validations pass.
     START TRANSACTION;
 
+    -- Create the application row; the AFTER INSERT trigger writes its audit record.
     INSERT INTO applications (job_id, candidate_id, status, similarity_score, applied_at)
     VALUES (p_job_id, p_candidate_id, 'applied', p_similarity_score, NOW());
 
+    -- Persist the application and trigger audit row as one transaction.
     COMMIT;
 
+    -- Return success code and human-readable result to the caller.
     SET p_status_code = 0;
     SET p_status_message = 'Success: Application submitted successfully and logged.';
 END proc_label$$
@@ -417,7 +429,7 @@ hire_label: BEGIN
         SET p_status_message = 'Transaction Failed: Error occurred during candidate hiring. Rolled back.';
     END;
 
-    -- Validation: Ensure application exists
+    -- Read the current application state; a missing row returns NULL.
     SELECT status INTO v_app_status
     FROM applications
     WHERE job_id = p_job_id AND candidate_id = p_candidate_id;
@@ -432,32 +444,32 @@ hire_label: BEGIN
         LEAVE hire_label;
     END IF;
 
-    -- Begin Atomic Transaction
+    -- Start the atomic hiring write sequence after the pre-check passes.
     START TRANSACTION;
 
-    -- Step 1: Update application status
+    -- Step 1: Mark the application hired; the status trigger records this transition.
     UPDATE applications
     SET status = 'hired'
     WHERE job_id = p_job_id AND candidate_id = p_candidate_id;
 
-    -- Step 2: Decrement available vacancies safely
+    -- Step 2: Decrement vacancies, clamping at zero to prevent a negative count.
     UPDATE jobs
     SET num_positions = GREATEST(0, num_positions - 1)
     WHERE job_id = p_job_id;
 
-    -- Step 3: Check remaining vacancies
+    -- Step 3: Read the updated vacancy count to decide whether the job is filled.
     SELECT num_positions INTO v_remaining_positions
     FROM jobs
     WHERE job_id = p_job_id;
 
-    -- Step 4: If no more vacancies remain, close the job opening
+    -- Step 4: Close the job when no vacancies remain; the job trigger audits the status change.
     IF v_remaining_positions <= 0 THEN
         UPDATE jobs
         SET status = 'closed'
         WHERE job_id = p_job_id;
     END IF;
 
-    -- Step 5: Audit the hiring decision
+    -- Step 5: Add a hiring-specific audit entry including the recruiter user ID.
     INSERT INTO audit_logs (table_name, action_type, record_id, changed_by, description, happened_at)
     VALUES (
         'applications',
@@ -469,8 +481,10 @@ hire_label: BEGIN
         NOW()
     );
 
+    -- Persist all hiring changes and audit entries together.
     COMMIT;
 
+    -- Return the completed hiring status and remaining vacancy count.
     SET p_status_code = 0;
     SET p_status_message = CONCAT('Success: Candidate hired successfully. Remaining open positions: ', v_remaining_positions);
 END hire_label$$
@@ -493,6 +507,7 @@ CREATE PROCEDURE sp_post_job_with_audit(
     OUT p_status_msg    VARCHAR(255)
 )
 BEGIN
+    -- Roll back both the job row and audit row if any statement raises an SQL error.
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         ROLLBACK;
@@ -500,13 +515,17 @@ BEGIN
         SET p_status_msg = 'Transaction Failed: Error inserting new job posting. Rolled back.';
     END;
 
+    -- Start a transaction so job creation and its audit event succeed or fail together.
     START TRANSACTION;
 
+    -- Insert the new open job with the recruiter-supplied role and vacancy details.
     INSERT INTO jobs (company_id, job_title, job_description, experience_min, experience_max, payrate, location, status, num_positions, posted_at)
     VALUES (p_company_id, p_job_title, p_job_desc, p_exp_min, p_exp_max, p_payrate, p_location, 'open', p_positions, NOW());
 
+    -- Capture the auto-generated job ID for the audit row and OUT parameter.
     SET p_new_job_id = LAST_INSERT_ID();
 
+    -- Record who/what was posted in the audit history within the same transaction.
     INSERT INTO audit_logs (table_name, action_type, record_id, changed_by, description, happened_at)
     VALUES (
         'jobs',
@@ -517,7 +536,9 @@ BEGIN
         NOW()
     );
 
+    -- Persist the new job and its audit row together.
     COMMIT;
+    -- Return a success message to the Next.js API caller.
     SET p_status_msg = 'Success: Job created and published successfully.';
 END$$
 
@@ -528,19 +549,26 @@ DELIMITER ;
 -- SECTION 4: DEMONSTRATION & VERIFICATION OF ADVANCED FEATURES
 -- ============================================================================
 
--- 4.1 Test sp_apply_job execution
+-- 4.1 Submit the sample application for candidate 2 to job 4. This CALL can
+--     permanently insert an application and its audit row because the procedure commits.
 CALL sp_apply_job(2, 4, 0.8250, @out_code, @out_msg);
+-- Read the OUT parameters returned by sp_apply_job: success/error code and message.
 SELECT @out_code AS result_code, @out_msg AS result_message;
 
--- 4.2 Test sp_hire_candidate execution
+-- 4.2 Hire candidate 1 for job 1 as user 1. This CALL commits status, vacancy,
+--     and audit changes; do not rerun casually on a database with valuable data.
 CALL sp_hire_candidate(1, 1, 1, @hire_code, @hire_msg);
+-- Read the OUT parameters returned by sp_hire_candidate.
 SELECT @hire_code AS hire_code, @hire_msg AS hire_message;
 
--- 4.3 Inspect Triggers output in Audit Log View
+-- 4.3 Display the ten newest audit events, including events created by triggers.
 SELECT * FROM vw_audit_history LIMIT 10;
 
--- 4.4 Inspect Analytical Views
+-- 4.4 List currently open jobs with applicant counts and average match scores.
 SELECT * FROM vw_active_jobs;
+-- Summarize each candidate's application totals and outcomes.
 SELECT * FROM vw_candidate_summary;
+-- Show job and applicant pipeline totals grouped by company.
 SELECT * FROM vw_company_analytics;
+-- Show skill demand and candidate supply for the first ten skills.
 SELECT * FROM vw_skill_demand LIMIT 10;

@@ -14,6 +14,7 @@
 --   • Ahana S S  (PES1UG24CS910) — Member 2 (Lead: Analytical Queries & Vector DB Architect)
 -- ============================================================================
 
+-- Select the database that will receive the seed rows and DML demonstrations.
 USE placement_analytics;
 
 -- ============================================================================
@@ -257,7 +258,7 @@ WHERE  candidate_id = 2
   AND  skill_id = 15; -- Prune HTML from Java backend specialist profile
 
 -- ----------------------------------------------------------------------------
--- 4. VERIFICATION OF SEED DATA RECORD COUNTS
+-- Count the main entity rows together so the seed operation can be checked at a glance.
 -- ----------------------------------------------------------------------------
 SELECT 'users' AS tbl, COUNT(*) AS count FROM users
 UNION ALL

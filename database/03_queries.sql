@@ -14,6 +14,7 @@
 --   • Ahana S S  (PES1UG24CS910) — Member 2 (Lead: Analytical Queries & Vector DB Architect)
 -- ============================================================================
 
+-- Select the schema that contains the tables queried throughout this file.
 USE placement_analytics;
 
 -- ============================================================================
@@ -162,12 +163,11 @@ WHERE j.job_id IN (
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- Q4.1: Candidates Scoring Above Their Specific Job's Dynamic Average
+-- Q4.1: Candidates Scoring at or Above Their Job's Average (Grouped Derived Table)
 -- ----------------------------------------------------------------------------
--- DBMS THEORY:
---   In a correlated subquery, the inner query references attributes from the outer query
---   (sub.job_id = a.job_id). It computes the average match score dynamically FOR THAT
---   SPECIFIC JOB opening and verifies if the candidate scored above peer applicants.
+-- The derived table computes one average per job independently; the outer query joins
+-- each application to its job's average and keeps scores at or above that average.
+-- Q4.2 below is the file's correlated subquery example because it references co.company_id.
 SELECT
     c.full_name,
     j.job_title,
@@ -291,7 +291,7 @@ ORDER BY verified_mandatory_skills_matched DESC, a.similarity_score DESC;
 SELECT
     j.job_title,
     c.full_name                         AS candidate_name,
-    a.similarity_score,
+    a.similarity_score,a.job_id,
     RANK()       OVER (PARTITION BY a.job_id ORDER BY a.similarity_score DESC) AS score_rank,
     DENSE_RANK() OVER (PARTITION BY a.job_id ORDER BY a.similarity_score DESC) AS dense_score_rank,
     ROW_NUMBER() OVER (PARTITION BY a.job_id ORDER BY a.similarity_score DESC) AS row_num
@@ -353,6 +353,7 @@ ORDER BY relevance_score DESC;
 -- ----------------------------------------------------------------------------
 -- 'UNION' automatically deduplicates identical city names across tables.
 -- (UNION ALL would retain duplicates if frequency counting was desired).
+-- Combine distinct city/source pairs from jobs and company headquarters.
 SELECT location AS city, 'Job Posting City' AS source_type FROM jobs WHERE location IS NOT NULL
 UNION
 SELECT location AS city, 'Company HQ'       AS source_type FROM companies WHERE location IS NOT NULL

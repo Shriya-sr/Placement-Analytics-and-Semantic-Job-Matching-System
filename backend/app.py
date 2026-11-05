@@ -167,4 +167,7 @@ def sync_mysql():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
+    # Keep the demo server in a single process. Watching the project root can
+    # restart it for unrelated files (datasets, docs, generated artifacts) and
+    # interrupt Chroma's dependency imports during startup on Windows.
+    uvicorn.run(app, host="127.0.0.1", port=8000, reload=False)

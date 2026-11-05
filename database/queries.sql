@@ -1,11 +1,14 @@
 -- =============================================================
 -- Placement Analytics & Semantic Job Matching System
 -- Phase 2: DML + Complex SQL Queries
+-- File note: This is an alternate/older teaching script. The setup helper
+-- runs database/02_dml.sql and database/04_advanced.sql; it does not run this file.
 -- Covers: Unit 2 - DML, Aggregate Functions, Nested Subqueries,
 --          Correlated Queries, Join Expressions, Views, CTEs,
 --          Window Functions, Full-Text Search
 -- =============================================================
 
+-- Select the schema used by the seed, update, delete, and query examples below.
 USE placement_analytics;
 
 -- =============================================================
@@ -327,6 +330,7 @@ FROM candidates  c
 LEFT JOIN applications a ON a.candidate_id = c.candidate_id
 GROUP BY c.candidate_id, c.full_name, c.category, c.cgpa;
 
--- Query the views
+-- Query the active-jobs view and sort openings by the number of applicants.
 SELECT * FROM vw_active_jobs ORDER BY applicant_count DESC;
+-- Query the candidate summary view and sort candidates by their best match score.
 SELECT * FROM vw_candidate_summary ORDER BY best_match_score DESC;
