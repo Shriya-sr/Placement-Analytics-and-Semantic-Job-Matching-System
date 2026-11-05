@@ -6,10 +6,10 @@
 
 ## 👥 Team Members & Responsibilities
 
-| Name | SRN | Section | 
-|:---|:---|:---:|:---|
-| **Shriya S R** | PES1UG24CS449 | H | 
-| **Ahana Srinivas Sivaram** | PES1UG24CS910 | H | 
+| Name | SRN | Section |
+|:---|:---|:---:|
+| **Shriya S R** | PES1UG24CS449 | H |
+| **Ahana Srinivas Sivaram** | PES1UG24CS910 | H |
 
 ---
 
@@ -339,7 +339,7 @@ Open **`http://localhost:3000`** in your browser.
 
 ---
 
-## 🎬 Evaluation Demo Guide (How to Present to Evaluators)
+## 🎬 Demo Guide 
 
 1. **Relational Schema & DDL (Rubric #1–3)**:
    - Present [`docs/er_diagram.png`](docs/er_diagram.png) and explain the 3NF decomposition of candidate skills and job requirements.
