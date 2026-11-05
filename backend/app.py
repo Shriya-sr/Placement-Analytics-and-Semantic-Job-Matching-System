@@ -73,11 +73,33 @@ class JobIndexRequest(BaseModel):
 
 @app.get("/")
 def root():
+    resumes_count = vector_service.resumes_col.count()
+    jobs_count = vector_service.jobs_col.count()
     return {
         "status": "online",
         "service": "Placement Analytics Vector Engine",
         "engine": "ChromaDB Persistent Client",
-        "metric": "Cosine Similarity"
+        "metric": "Cosine Similarity (1.0 - cosine_distance)",
+        "embedding_dimensions": 384,
+        "collections": {
+            "resumes_collection": {
+                "count": resumes_count,
+                "description": "Candidate resumes and skill profiles"
+            },
+            "jobs_collection": {
+                "count": jobs_count,
+                "description": "Job descriptions and requirement postings"
+            }
+        },
+        "interactive_swagger_ui": "/docs",
+        "demo_endpoints": {
+            "match_candidates": "POST /api/match/candidates",
+            "recommend_jobs": "POST /api/match/jobs",
+            "upsert_candidate": "POST /api/vector/candidate",
+            "delete_candidate": "DELETE /api/vector/candidate/{candidate_id}",
+            "upsert_job": "POST /api/vector/job",
+            "sync_mysql": "POST /api/vector/sync-mysql"
+        }
     }
 
 
