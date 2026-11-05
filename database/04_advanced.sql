@@ -320,6 +320,7 @@ DELIMITER ;
 DROP PROCEDURE IF EXISTS sp_apply_job;
 DROP PROCEDURE IF EXISTS sp_hire_candidate;
 DROP PROCEDURE IF EXISTS sp_post_job_with_audit;
+DROP PROCEDURE IF EXISTS sp_auto_reject_expired_applications;
 
 DELIMITER $$
 
@@ -542,6 +543,97 @@ BEGIN
     SET p_status_msg = 'Success: Job created and published successfully.';
 END$$
 
+
+-- ----------------------------------------------------------------------------
+-- Procedure 4: sp_auto_reject_expired_applications (1-Month Inactivity Auto-Rejection)
+-- ----------------------------------------------------------------------------
+-- BUSINESS REQUIREMENT (Syllabus Invariant):
+--   If a recruiter does not accept (hire/shortlist) an applicant within 1 month (30 days),
+--   the application status automatically transitions to 'rejected'.
+--
+-- DBMS CONCEPTS DEMONSTRATED:
+--   * Atomic Batch Transaction: START TRANSACTION ... COMMIT with EXIT HANDLER FOR SQLEXCEPTION.
+--   * Change Data Capture via Trigger: When applications.status updates to 'rejected',
+--     trg_after_application_update automatically intercepts each modified tuple and
+--     writes an immutable transition entry into audit_logs.
+--   * Dynamic Inactivity Parameter: Accepts custom days (default 30 days = 1 month).
+CREATE PROCEDURE sp_auto_reject_expired_applications(
+    IN  p_inactivity_days INT,           -- Inactivity threshold in days (default 30 days = 1 month)
+    OUT p_rejected_count  INT,           -- Number of applications rejected
+    OUT p_status_message  VARCHAR(255)   -- Diagnostic summary message
+)
+auto_reject_label: BEGIN
+    DECLARE v_days INT DEFAULT 30;
+
+    -- Exception handler with automatic transaction rollback
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        SET p_rejected_count = 0;
+        SET p_status_message = 'Transaction Failed: SQLEXCEPTION during 1-month auto-rejection. Rolled back.';
+    END;
+
+    -- Enforce default 30 days if NULL or non-positive value passed
+    IF p_inactivity_days IS NOT NULL AND p_inactivity_days > 0 THEN
+        SET v_days = p_inactivity_days;
+    END IF;
+
+    -- Begin atomic batch write transaction
+    START TRANSACTION;
+
+    -- Step 1: Update status to 'rejected' for pending applications older than threshold
+    -- Note: trg_after_application_update automatically logs each transition in audit_logs.
+    UPDATE applications
+    SET status = 'rejected'
+    WHERE status IN ('applied', 'reviewed')
+      AND applied_at < (NOW() - INTERVAL v_days DAY);
+
+    -- Step 2: Capture total rows modified
+    SET p_rejected_count = ROW_COUNT();
+
+    -- Step 3: Record a high-level batch audit log entry if any records were expired
+    IF p_rejected_count > 0 THEN
+        INSERT INTO audit_logs (table_name, action_type, record_id, changed_by, description, happened_at)
+        VALUES (
+            'applications',
+            'UPDATE',
+            NULL,
+            NULL,
+            CONCAT('Batch Inactivity Rule: Auto-rejected ', p_rejected_count, 
+                   ' application(s) pending over ', v_days, ' days without recruiter acceptance.'),
+            NOW()
+        );
+    END IF;
+
+    -- Persist all status transitions and audit logs atomically
+    COMMIT;
+
+    -- Return diagnostic message to caller
+    SET p_status_message = CONCAT('Success: ', p_rejected_count, ' stale application(s) older than ', v_days, ' days were automatically rejected and audited.');
+END auto_reject_label$$
+
+DELIMITER ;
+
+
+-- ============================================================================
+-- SECTION 3B: MYSQL EVENT SCHEDULER (Automated Background Processing)
+-- ============================================================================
+-- DBMS THEORY:
+--   The MySQL Event Scheduler executes recurring tasks at scheduled intervals directly
+--   within the database engine, ensuring business invariants execute even without API traffic.
+SET GLOBAL event_scheduler = ON;
+
+DROP EVENT IF EXISTS ev_auto_reject_expired_applications;
+
+DELIMITER $$
+CREATE EVENT ev_auto_reject_expired_applications
+ON SCHEDULE EVERY 1 DAY
+STARTS CURRENT_TIMESTAMP
+COMMENT 'Daily background maintenance: Auto-reject applications unaccepted after 30 days'
+DO
+BEGIN
+    CALL sp_auto_reject_expired_applications(30, @out_ev_cnt, @out_ev_msg);
+END$$
 DELIMITER ;
 
 
@@ -572,3 +664,10 @@ SELECT * FROM vw_candidate_summary;
 SELECT * FROM vw_company_analytics;
 -- Show skill demand and candidate supply for the first ten skills.
 SELECT * FROM vw_skill_demand LIMIT 10;
+
+-- 4.5 Test 1-Month Inactivity Auto-Rejection (Procedure & Trigger Verification)
+-- Demonstrates automatic rejection of applications pending for > 30 days.
+CALL sp_auto_reject_expired_applications(30, @rejected_cnt, @reject_msg);
+SELECT @rejected_cnt AS auto_rejected_count, @reject_msg AS result_message;
+-- Inspect audit log to verify trg_after_application_update captured the rejection:
+SELECT * FROM vw_audit_history WHERE description LIKE '%rejected%' LIMIT 5;

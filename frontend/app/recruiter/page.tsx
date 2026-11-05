@@ -79,6 +79,26 @@ export default function RecruiterDashboard() {
     }
   };
 
+  const handleAutoReject = async () => {
+    setToast(null);
+    try {
+      const res = await fetch('/api/applications', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'auto_reject', days: 30 }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setToast(`Error: ${data.error || 'Auto-reject failed'}`);
+      } else {
+        setToast(`Auto-Rejection Policy: ${data.message}`);
+        refreshData();
+      }
+    } catch (err: any) {
+      setToast(`Error: ${err.message}`);
+    }
+  };
+
   if (loading) {
     return (
       <div className="max-w-7xl mx-auto px-4 py-16 text-center text-slate-500">
@@ -131,6 +151,13 @@ export default function RecruiterDashboard() {
         </div>
 
         <div className="flex flex-wrap gap-2">
+          <button
+            onClick={handleAutoReject}
+            className="px-3.5 py-2 bg-slate-800 text-white rounded-lg text-xs font-semibold hover:bg-slate-900 shadow-sm transition"
+            title="Auto-reject applications pending over 30 days without recruiter action"
+          >
+            Auto-Reject Stale (&gt;1 Mo) ⏱️
+          </button>
           <Link
             href="/recruiter/match"
             className="px-4 py-2 bg-purple-600 text-white rounded-lg text-xs font-semibold hover:bg-purple-700 shadow-sm transition"
@@ -221,7 +248,12 @@ export default function RecruiterDashboard() {
                       {app.cgpa != null ? `CGPA: ${parseFloat(app.cgpa).toFixed(2)}` : 'CGPA: 8.50'}
                     </td>
                     <td className="px-6 py-4 text-slate-700 font-medium">
-                      {app.job_title}
+                      <div>{app.job_title}</div>
+                      {app.applied_at && (
+                        <div className="text-[11px] text-slate-400 font-normal mt-0.5">
+                          Applied: {new Date(app.applied_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </div>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-800">

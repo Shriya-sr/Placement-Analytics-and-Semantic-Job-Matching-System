@@ -18,6 +18,8 @@ export async function GET(req: NextRequest) {
       companyId = String(session.companyId);
     }
 
+
+
     let sql = `
       SELECT 
         a.application_id, a.job_id, a.candidate_id, a.status, a.similarity_score, a.applied_at,
@@ -110,7 +112,17 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized: Only recruiters can manage applications' }, { status: 403 });
     }
 
-    const { jobId, candidateId, action } = await req.json();
+    const body = await req.json();
+    const { jobId, candidateId, action, days } = body;
+
+    // Handle manual trigger of 1-Month Inactivity Auto-Rejection
+    if (action === 'auto_reject') {
+      const thresholdDays = typeof days === 'number' && days > 0 ? days : 30;
+      await query('CALL sp_auto_reject_expired_applications(?, @cnt, @msg)', [thresholdDays]);
+      const out = await query<any[]>('SELECT @cnt AS count, @msg AS message');
+      const res = out && out[0] ? out[0] : { count: 0, message: 'Auto-rejection completed' };
+      return NextResponse.json({ success: true, count: res.count, message: res.message });
+    }
 
     if (!jobId || !candidateId || !action) {
       return NextResponse.json({ error: 'jobId, candidateId, and action are required' }, { status: 400 });
